@@ -23,7 +23,7 @@ use self::chip::Chip;
 use crate::common::{
     self, list_specific_sdkconfigs, manifest_dir, sanitize_c_env_vars, sanitize_project_path,
     setup_clang_env, workspace_dir, EspIdfBuildOutput, EspIdfComponents, InstallDir, NO_PATCHES,
-    V_4_4_PATCHES, V_5_0_PATCHES,
+    V_4_4_PATCHES, V_5_0_PATCHES, AUTOPALLET_PATCHES,
 };
 use crate::config::{BuildConfig, ESP_IDF_GLOB_VAR_PREFIX, ESP_IDF_TOOLS_INSTALL_DIR_VAR};
 
@@ -335,6 +335,10 @@ pub fn build() -> Result<EspIdfBuildOutput> {
         if let SourceTree::Git(repository) = &idf.esp_idf_dir {
             repository.apply_once(patch_set.iter().map(|p| manifest_dir.join(p)))?;
         }
+    }
+
+    if let SourceTree::Git(repository) = &idf.esp_idf_dir {
+        repository.apply_once(AUTOPALLET_PATCHES.iter().map(|p| manifest_dir.join(p)))?;
     }
 
     // "PATH" is anyway passed to the CMake generator, but if we don't set it here, we get the following warnings from CMake:

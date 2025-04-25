@@ -1,0 +1,126 @@
+diff --git a/components/esp_app_format/esp_app_desc.c b/components/esp_app_format/esp_app_desc.c
+index edb22d0893..c65bd0e7e8 100644
+--- a/components/esp_app_format/esp_app_desc.c
++++ b/components/esp_app_format/esp_app_desc.c
+@@ -68,6 +68,7 @@ static inline char IRAM_ATTR to_hex_digit(unsigned val)
+ __attribute__((constructor)) void esp_init_app_elf_sha256(void)
+ {
+     esp_app_get_elf_sha256(NULL, 0);
++    esp_get_gnu_build_id(NULL, 0);
+ }
+ 
+ /* The esp_app_desc.app_elf_sha256 should be possible to print in panic handler during cache is disabled.
+@@ -101,3 +102,42 @@ int IRAM_ATTR esp_app_get_elf_sha256(char* dst, size_t size)
+     dst[2*n] = 0;
+     return 2*n + 1;
+ }
++
++// NOTE(will): AutoPallet patch: include GNU build-id in coredump.
++int IRAM_ATTR esp_get_gnu_build_id(uint8_t* dst, size_t size)
++{
++    // (These symbols come from a custom linkerscript.)
++    extern const uint8_t __attribute__((weak)) __build_id_start[];
++    extern const uint8_t __attribute__((weak)) __build_id_end[];
++
++    static uint8_t s_gnu_build_id[GNU_BUILD_ID_LEN];
++    static bool first_call = true;
++    if (first_call) {
++        first_call = false;
++
++        const volatile uint8_t *flash_ptr = __build_id_start + 16;  // skip hdr+"GNU\0"
++        const size_t build_id_len = __build_id_end - flash_ptr;
++
++        // If the build-id wasn't included by in the linkerscript, write all zeros instead. This is
++        // so we can distinguish between "linker flag not passed" and "ESP-IDF patch not applied".
++        if (&__build_id_start[0] != &__build_id_end[0] && build_id_len >= sizeof(s_gnu_build_id)) {
++            for (size_t i = 0; i < sizeof(s_gnu_build_id); ++i) {
++                s_gnu_build_id[i] = flash_ptr[i];
++            }
++        } else {
++            for (size_t i = 0; i < sizeof(s_gnu_build_id); ++i) {
++                s_gnu_build_id[i] = 0;
++            }
++        }
++    }
++    if (dst == NULL || size == 0) {
++        return 0;
++    }
++    // TODO(will): It's not clear to me that copying is even necessary here, but I'm modeling this
++    // after esp_app_get_elf_sha256 above as closely as possible.
++    size_t n = MIN(size, sizeof(s_gnu_build_id));
++    for (size_t i = 0; i < n; ++i) {
++        dst[i] = s_gnu_build_id[i];
++    }
++    return n;
++}
+diff --git a/components/esp_app_format/include/esp_app_desc.h b/components/esp_app_format/include/esp_app_desc.h
+index fd7582be79..551f0cae46 100644
+--- a/components/esp_app_format/include/esp_app_desc.h
++++ b/components/esp_app_format/include/esp_app_desc.h
+@@ -19,6 +19,9 @@ extern "C"
+ 
+ #define ESP_APP_DESC_MAGIC_WORD (0xABCD5432)  /*!< The magic word for the esp_app_desc structure that is in DROM. */
+ 
++// NOTE(will): AutoPallet patch: include GNU build-id in coredump.
++#define GNU_BUILD_ID_LEN 20
++
+ /**
+  * @brief Description about application.
+  */
+@@ -57,6 +60,9 @@ const esp_app_desc_t *esp_app_get_description(void);
+  */
+ int esp_app_get_elf_sha256(char* dst, size_t size);
+ 
++// NOTE(will): AutoPallet patch: include GNU build-id in coredump.
++int esp_get_gnu_build_id(uint8_t* dst, size_t size);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/components/esp_system/ld/esp32s3/sections.ld.in b/components/esp_system/ld/esp32s3/sections.ld.in
+index 850305ee69..6fd15e07bb 100644
+--- a/components/esp_system/ld/esp32s3/sections.ld.in
++++ b/components/esp_system/ld/esp32s3/sections.ld.in
+@@ -319,6 +319,11 @@ SECTIONS
+     *(.rodata_desc .rodata_desc.*)               /* Should be the first.  App version info.        DO NOT PUT ANYTHING BEFORE IT! */
+     *(.rodata_custom_desc .rodata_custom_desc.*) /* Should be the second. Custom app version info. DO NOT PUT ANYTHING BEFORE IT! */
+ 
++    /* NOTE(will): AutoPallet patch: include build-id in flash so that we can include in coredumps */
++    __build_id_start = .;
++    KEEP(*(.note.gnu.build-id))
++    __build_id_end = .;
++
+     /* Create an empty gap within this section. Thanks to this, the end of this
+      * section will match .flah.rodata's begin address. Thus, both sections
+      * will be merged when creating the final bin image. */
+diff --git a/components/espcoredump/src/core_dump_elf.c b/components/espcoredump/src/core_dump_elf.c
+index 6d14a93472..6c7a9501ae 100644
+--- a/components/espcoredump/src/core_dump_elf.c
++++ b/components/espcoredump/src/core_dump_elf.c
+@@ -536,6 +536,26 @@ static int elf_write_core_dump_info(core_dump_elf_t *self)
+         data_len += ret;
+     }
+ 
++    // NOTE(will): AutoPallet patch: include GNU build-id in coredump.
++    uint8_t gnu_build_id[GNU_BUILD_ID_LEN];
++    esp_get_gnu_build_id(gnu_build_id, sizeof(gnu_build_id));
++
++    // TODO(will): this is only the first 8 bytes
++    ESP_COREDUMP_LOGI("Writing build-id to coredump: %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
++                      gnu_build_id[0], gnu_build_id[1], gnu_build_id[2], gnu_build_id[3],
++                      gnu_build_id[4], gnu_build_id[5], gnu_build_id[6], gnu_build_id[7],
++                      gnu_build_id[8], gnu_build_id[9], gnu_build_id[10], gnu_build_id[11],
++                      gnu_build_id[12], gnu_build_id[13], gnu_build_id[14], gnu_build_id[15],
++                      gnu_build_id[16], gnu_build_id[17], gnu_build_id[18], gnu_build_id[19]);
++
++    ret = elf_add_note(self,
++                       "GNU",
++                       3,
++                       gnu_build_id,
++                       sizeof(gnu_build_id));
++    ELF_CHECK_ERR((ret > 0), ret, "GNU build-id note write failed. Returned (%d).", ret);
++    data_len += ret;
++
+     ret = elf_process_note_segment(self, data_len);
+     ELF_CHECK_ERR((ret > 0), ret,
+                     "EXTRA_INFO note segment processing failure, returned(%d).", ret);

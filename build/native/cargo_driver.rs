@@ -337,6 +337,14 @@ pub fn build() -> Result<EspIdfBuildOutput> {
         }
     }
 
+    let user_patches = config.esp_idf_user_patches();
+
+    if idf.is_managed_espidf && !user_patches.is_empty() {
+        if let SourceTree::Git(repository) = &idf.esp_idf_dir {
+            repository.apply_once(user_patches.iter().map(|p| workspace_dir.join(p)))?;
+        }
+    }
+
     // "PATH" is anyway passed to the CMake generator, but if we don't set it here, we get the following warnings from CMake:
     // ```
     // Compiler family detection failed due to error: ToolNotFound: Failed to find tool. Is `riscv32-esp-elf-gcc` installed?

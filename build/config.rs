@@ -38,6 +38,12 @@ pub struct BuildConfig {
     /// The name of the root crate currently compiling for, in the event that the
     /// workspace does not have a root crate.
     pub esp_idf_sys_root_crate: Option<String>,
+
+    /// Zero or more paths to git patch files to apply to ESP-IDF before building. Resolved relative
+    /// to the workspace root. (Only works with the native builder and a managed git repo build
+    /// directory.)
+    #[serde(deserialize_with = "parse::list")]
+    esp_idf_patches: Option<Vec<PathBuf>>,
 }
 
 impl BuildConfig {
@@ -89,6 +95,11 @@ impl BuildConfig {
             .unwrap_or_else(|| vec![DEFAULT_SDKCONFIG_DEFAULTS_FILE.into()])
     }
 
+    /// Get a list of user-specified ESP-IDF patch files.
+    pub fn esp_idf_user_patches(&self) -> Vec<PathBuf> {
+        self.esp_idf_patches.clone().unwrap_or_default()
+    }
+
     /// Get the configuration from the `package.metadata.esp-idf-sys` object of the root
     /// crate's manifest, and update all options that are [`None`].
     ///
@@ -133,6 +144,7 @@ impl BuildConfig {
                     #[cfg(any(feature = "native", not(feature = "pio")))]
                         native: _,
                     esp_idf_sys_root_crate: _,
+                    esp_idf_patches,
                 },
         } = EspIdfSys::deserialize(&root_package.metadata)?;
 
@@ -147,6 +159,7 @@ impl BuildConfig {
             esp_idf_tools_install_dir,
         );
         utils::set_when_none(&mut self.mcu, mcu);
+        utils::set_when_none(&mut self.esp_idf_patches, esp_idf_patches);
 
         #[cfg(any(feature = "native", not(feature = "pio")))]
         self.native.with_cargo_metadata(root_package, &metadata)?;

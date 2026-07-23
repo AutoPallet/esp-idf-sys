@@ -331,6 +331,9 @@ pub fn build() -> Result<EspIdfBuildOutput> {
         ));
     }
 
+    let cmake_build_dir = out_dir.join("build");
+    reset_cmake_build_dir_if_esp_idf_changed(&out_dir, &cmake_build_dir, idf.esp_idf_dir.path())?;
+
     // "PATH" is anyway passed to the CMake generator, but if we don't set it here, we get the following warnings from CMake:
     // ```
     // Compiler family detection failed due to error: ToolNotFound: Failed to find tool. Is `riscv32-esp-elf-gcc` installed?
@@ -447,10 +450,6 @@ pub fn build() -> Result<EspIdfBuildOutput> {
 
     // Get the directories of all extra components to build.
     let extra_component_dirs = to_cmake_path_list(config.native.extra_component_dirs()?)?;
-
-    // `cmake::Config` automatically uses `<out_dir>/build` and there is no way to query
-    // what build directory it sets, so we hard-code it.
-    let cmake_build_dir = out_dir.join("build");
 
     let query = cmake::Query::new(
         &cmake_build_dir,
@@ -608,6 +607,34 @@ pub fn build() -> Result<EspIdfBuildOutput> {
     };
 
     Ok(build_output)
+}
+
+fn reset_cmake_build_dir_if_esp_idf_changed(
+    out_dir: &Path,
+    cmake_build_dir: &Path,
+    esp_idf_dir: &Path,
+) -> Result<()> {
+    let marker_path = out_dir.join(".esp-idf-path");
+    let esp_idf_dir = esp_idf_dir.canonicalize()?;
+    let esp_idf_path = esp_idf_dir.try_to_str()?;
+
+    let previous_esp_idf_path = match fs::read_to_string(&marker_path) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+
+    if previous_esp_idf_path.as_deref() != Some(esp_idf_path) && cmake_build_dir.exists() {
+        eprintln!(
+            "ESP-IDF source changed; removing stale CMake build directory '{}'",
+            cmake_build_dir.display()
+        );
+        fs::remove_dir_all(cmake_build_dir)?;
+    }
+
+    fs::write(marker_path, esp_idf_path)?;
+
+    Ok(())
 }
 
 // Generate `sdkconfig.defaults` content based on the crate manifest (`Cargo.toml`).

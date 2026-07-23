@@ -122,6 +122,8 @@ impl BuildConfig {
             (None, None) => bail!("could not identify the root crate and `ESP_IDF_SYS_ROOT_CRATE` not specified")
         };
 
+        embuild::cargo::track_file(root_package.manifest_path.as_std_path());
+
         // Deserialize the options from the `esp-idf-sys` object.
         let EspIdfSys {
             v:
